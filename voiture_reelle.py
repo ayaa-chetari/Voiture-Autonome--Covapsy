@@ -1,25 +1,3 @@
-# Programme principal de conduite autonome CoVAPSy
-#
-# Démarrage : python main_autonomous.py
-# Commandes disponibles dans le terminal :
-#   a    → démarre la conduite autonome
-#   n  → arrête la voiture
-#   q  → arrête la voiture et quitte le programme
-#
-# Conformité règlement CoVAPSy 2026 :
-#   - La voiture n'avance pas avant réception de la commande GO
-#   - La voiture s'arrête immédiatement sur commande STOP
-#   - Marche arrière automatique en cas de blocage
-#   - La voiture va dans le bon sens par rapport aux 2 couleurs des murs
-#
-# contrôleur neuronal virtuel différentiel
-# reprojeté en commandes Ackermann
-# + filtrage moyenneur des données LiDAR
-# + utilisation de 5 points exacts :
-#   gauche: 60° et 70°
-#   front : 0°
-#   droite: -60° et -70°
-
 import logging
 import os
 import sys
@@ -27,19 +5,18 @@ import threading
 import time
 import importlib
 
-from commun_v1 import (
+from commun import (
     filtre_moyenneur,
     analyze_walls,
-    calculer_commande_auto,
+    calculer_commande_automate,
+    reset_automate,
+    get_automate_state,
 )
 
 import config
 from robot_base import Actionneurs, CapteurLidar
 
 
-# ============================================================
-# Configuration du logging (un logger c'est juste un print amélioré, avec timestamp, niveau de gravité, etc.)
-# ============================================================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -49,16 +26,14 @@ logging.basicConfig(
         logging.FileHandler("covapsy.log", encoding="utf-8"),
     ]
 )
+
 logger = logging.getLogger(__name__)
+
+ETAT_NAMES = {0: "NAVIGATION", 1: "BLOCAGE"}
+SOUS_ETAT_NAMES = {0: "BACKWARD", 2: "TURN_LEFT", 3: "TURN_RIGHT"}
 
 
 def initialiser_camera():
-    """Initialise la camera Raspberry Pi si disponible.
-
-    Retourne:
-        camera_obj | None
-        show_window (bool)
-    """
     if not bool(config.CAMERA_ACTIVE):
         logger.info("Camera desactivee par config")
         return None, False
@@ -79,32 +54,40 @@ def initialiser_camera():
 
     try:
         camera = picamera2_cls()
-        width = int(config.CAMERA_WIDTH)
-        height = int(config.CAMERA_HEIGHT)
 
         cfg = camera.create_preview_configuration(
-            main={"size": (width, height), "format": "RGB888"},
+            main={
+                "size": (int(config.CAMERA_WIDTH), int(config.CAMERA_HEIGHT)),
+                "format": "RGB888",
+            },
             queue=False,
         )
+
         camera.configure(cfg)
         camera.start()
         time.sleep(1.0)
-        logger.info("Camera initialisee (%dx%d)", width, height)
+
+        logger.info(
+            "Camera initialisee (%dx%d)",
+            int(config.CAMERA_WIDTH),
+            int(config.CAMERA_HEIGHT),
+        )
+
         return camera, show_window
+
     except Exception as exc:
         logger.warning("Echec initialisation camera: %s", exc)
         return None, False
 
 
-def gestion_commandes_clavier(mode_auto_event: threading.Event, stop_event: threading.Event, actionneurs: Actionneurs):
-    """Thread de lecture commandes utilisateur (A/N/Q) sans bloquer la boucle de conduite."""
+def gestion_commandes_clavier(mode_auto_event, stop_event, actionneurs):
     while not stop_event.is_set():
         try:
-            cmd = input("\nCommande > ").strip().upper() #input est bloquant, mais c'est pas grave car c'est dans un thread séparé
+            cmd = input("\nCommande > ").strip().upper()
         except EOFError:
             cmd = "Q"
         except KeyboardInterrupt:
-            logger.info("Interruption clavier recue (Ctrl+C) — arret du programme")
+            logger.info("Interruption clavier recue")
             stop_event.set()
             break
 
@@ -112,8 +95,9 @@ def gestion_commandes_clavier(mode_auto_event: threading.Event, stop_event: thre
             if mode_auto_event.is_set():
                 print("  Deja en mode auto.")
             else:
-                logger.info("Mode auto active par l'utilisateur")
+                logger.info("Mode auto active")
                 print("  Mode auto active.")
+                reset_automate()
                 mode_auto_event.set()
                 actionneurs.demarrer()
 
@@ -121,13 +105,14 @@ def gestion_commandes_clavier(mode_auto_event: threading.Event, stop_event: thre
             if not mode_auto_event.is_set():
                 print("  Deja en mode manuel.")
             else:
-                logger.info("Mode auto desactive par l'utilisateur")
+                logger.info("Mode auto desactive")
                 print("  Mode auto desactive.")
                 mode_auto_event.clear()
+                reset_automate()
                 actionneurs.arreter()
 
         elif cmd == "Q":
-            logger.info("Quitter le programme.")
+            logger.info("Quitter le programme")
             stop_event.set()
 
         elif cmd:
@@ -135,51 +120,35 @@ def gestion_commandes_clavier(mode_auto_event: threading.Event, stop_event: thre
 
 
 def main():
-    # =========================
-    # Mode de fonctionnement
-    # =========================
-    mode_auto_event = threading.Event() # Precedamment appelé modeAuto, mais un Event est plus adapté pour la synchronisation entre threads
+    mode_auto_event = threading.Event()
     stop_event = threading.Event()
-    print("CoVAPSy — Conduite Autonome pour Webots")
-    print("Cliquer sur la vue 3D pour commencer")
+
+    print("CoVAPSy — Conduite Autonome")
     print("a : mode auto")
     print("n : stop")
     print("q : quitter")
-    
-    # =========================
-    # Initialisation des actionneurs
-    # =========================
-    act   = Actionneurs()
-    # act.demarrer()
-    logger.info("Actionneurs initialises et PWM actives")
+
+    act = Actionneurs()
+
+    logger.info("Actionneurs initialises")
     logger.info(
         "Bornes vitesse auto: min=%.3f m/s, max=%.3f m/s",
         float(config.VITESSE_AUTO_MIN_M_S),
         float(config.VITESSE_AUTO_MAX_M_S),
     )
-    
-    # =========================
-    # Initialisation du LiDAR
-    # =========================
+
     lidar = CapteurLidar()
+
     try:
-        # Initialisation du matériel
         logger.info("Connexion au lidar...")
         lidar.connecter()
         lidar.demarrer()
-        
         print("\n  Lidar connecté")
-    except Exception as e:
-        logger.error("Erreur critique : %s", e, exc_info=True)
-    
-    # =========================
-    # Initialisation du sonar arriere
-    # =========================
+    except Exception as exc:
+        logger.error("Erreur critique lidar : %s", exc, exc_info=True)
+
     sonar = None
 
-    # =========================
-    # Initialisation clavier
-    # =========================
     clavier_thread = threading.Thread(
         target=gestion_commandes_clavier,
         args=(mode_auto_event, stop_event, act),
@@ -187,51 +156,44 @@ def main():
         name="thread_commandes",
     )
     clavier_thread.start()
-    
-    # =========================
-    # Initialisation camera
-    # =========================
+
     camera, show_camera_window = initialiser_camera()
+
+    reset_automate()
+    last_read_time = 0.0
+    wall_info_memo = None
 
     try:
         while not stop_event.is_set():
-            # =========================
-            # Acquisition LiDAR et filtre
-            # =========================
+            now = time.time()
+
+            if (now - last_read_time) <= float(config.BOUCLE_PERIODE_S):
+                time.sleep(0.001)
+                continue
+
+            last_read_time = now
+
             if not lidar.lire():
                 time.sleep(config.BOUCLE_PERIODE_S)
                 continue
+
             tableau_lidar_filtre = filtre_moyenneur(lidar.tableau_mm)
 
-            # =========================
-            # Mode manuel / arret
-            # =========================
             if not mode_auto_event.is_set():
+                reset_automate()
+                wall_info_memo = None
                 time.sleep(config.BOUCLE_PERIODE_S)
                 continue
 
-            # =========================
-            # Commande auto navigation seulement
-            # =========================
-            v_cmd, angle_cmd = calculer_commande_auto(
-                tableau_lidar_filtre,
-                L_entraxe=config.L_ENTRAXE_M,
-                W_empattement=config.W_EMPATTEMENT_M,
-                maxangle_degre=config.ANGLE_DEGRE_MAX,
-                dmax=config.LIDAR_DMAX_MM,
-                v_min=config.VITESSE_AUTO_MIN_M_S,
-                v_max=config.VITESSE_AUTO_MAX_M_S,
-                debug=bool(config.AUTO_DEBUG),
-            )
+            fsm_before = get_automate_state()
+            etat_before = int(fsm_before.get("etat", 0))
 
-            # =========================
-            # Camera  — traitée uniquement quand la voiture est à l'arrêt
-            # =========================
-            wall_info = None
-            if camera is not None and abs(float(v_cmd)) < 1e-6:
+            wall_info = wall_info_memo
+
+            if camera is not None and etat_before == 1:
                 try:
-                    frame_rgb = camera.capture_array("main")
-                    frame_bgr = frame_rgb[:, :, ::-1].copy()
+                    frame_bgr = camera.capture_array("main").copy()
+
                     wall_info = analyze_walls(
                         frame_bgr,
                         band_ratio=float(config.CAMERA_BAND_RATIO),
@@ -240,6 +202,8 @@ def main():
                         unknown_value=int(config.CAMERA_UNKNOWN_VALUE),
                     )
 
+                    wall_info_memo = wall_info
+
                     if show_camera_window and wall_info is not None:
                         try:
                             cv2_mod = importlib.import_module("cv2")
@@ -247,51 +211,98 @@ def main():
                             cv2_mod.waitKey(1)
                         except Exception:
                             pass
+
                 except Exception as exc:
                     logger.warning("Erreur lecture camera: %s", exc)
 
+            else:
+                wall_info = None
+                wall_info_memo = None
+
+            wall_values = wall_info["value"] if wall_info else None
+
+            v_cmd, angle_cmd = calculer_commande_automate(
+            tableau_lidar_filtre,
+            L_entraxe=config.L_ENTRAXE_M,
+            W_empattement=config.W_EMPATTEMENT_M,
+            maxangle_degre=config.ANGLE_DEGRE_MAX,
+            dmax=config.LIDAR_DMAX_MM,
+            v_min=config.VITESSE_AUTO_MIN_M_S,
+            v_max=config.VITESSE_AUTO_MAX_M_S,
+            seuil_v_blocage=config.SEUIL_V_BLOCAGE_M_S,
+            wall_values=wall_values,
+            sec_front_fenetre_deg=config.SECURITE_FRONT_FENETRE_DEG,
+            sec_front_min_points=config.SECURITE_FRONT_MIN_POINTS,
+            seuil_front_degagement_mm=config.SEUIL_FRONT_DEGAGEMENT_MM,
+            blocage_action_duration_s=config.BLOCAGE_ACTION_DURATION_S,
+            boucle_periode_s=config.BOUCLE_PERIODE_S,
+            vitesse_blocage_m_s=config.VITESSE_BLOCAGE_M_S,
+            vitesse_turn_blocage_m_s=config.VITESSE_TURN_BLOCAGE_M_S,
+            angle_recul_fixe_deg=config.ANGLE_RECUL_FIXE_DEG,
+            debug=bool(config.AUTO_DEBUG),
+         )
             act.set_direction_degre(float(angle_cmd))
             act.set_vitesse_m_s(float(v_cmd))
+            
 
             if bool(config.DEBUG_ACTIONNEURS):
+                fsm = get_automate_state()
+                etat = int(fsm.get("etat", 0))
+                sous_etat = int(fsm.get("sous_etat", 0))
+
+                d_front = fsm.get("last_front_mm", None)
+                d_rear = fsm.get("last_rear_mm", None)
+
+                front_txt = "NA" if d_front is None else f"{float(d_front):.0f}"
+                rear_txt = "NA" if d_rear is None else f"{float(d_rear):.0f}"
+                wall_txt = "None" if wall_values is None else str(wall_values)
+
                 logger.info(
-                    "NAV v=%.2f ang=%.1f",
+                    "FSM [%s|%s] v=%.2f ang=%.1f dF=%s dR=%s back=%d turn_right=%s walls=%s",
+                    ETAT_NAMES.get(etat, "?"),
+                    SOUS_ETAT_NAMES.get(sous_etat, "-") if etat == 1 else "-",
                     float(v_cmd),
                     float(angle_cmd),
+                    front_txt,
+                    rear_txt,
+                    int(fsm.get("counter_etat_backward", 0)),
+                    str(bool(fsm.get("flag_turn_right", False))),
+                    wall_txt,
                 )
 
-            time.sleep(config.BOUCLE_PERIODE_S)
     except KeyboardInterrupt:
-        logger.info("Interruption clavier recue (Ctrl+C) — arret propre")
+        logger.info("Interruption clavier recue")
         stop_event.set()
-    
+
     finally:
-        # =========================
-        # Arrêt propre
-        # =========================
         logger.info("Arrêt propre en cours...")
-        try:
-            time.sleep(0.5)
-        except KeyboardInterrupt:
-            pass
+
         try:
             act.arreter()
         except Exception:
             pass
+
         if camera is not None:
             try:
                 camera.stop()
             except Exception:
                 pass
+
         if show_camera_window:
             try:
                 cv2_mod = importlib.import_module("cv2")
                 cv2_mod.destroyAllWindows()
             except Exception:
                 pass
-        lidar.arreter()
+
+        try:
+            lidar.arreter()
+        except Exception:
+            pass
+
         logger.info("Programme terminé.")
         print("Au revoir.")
+
 
 if __name__ == "__main__":
     main()

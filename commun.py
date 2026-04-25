@@ -1,15 +1,8 @@
 import numpy as np
 import cv2
 
-# =========================
-# Fonctions traitement LiDAR
-# =========================
+
 def filtre_moyenneur(tab, fenetre=2):
-    """
-    Filtre moyenneur circulaire.
-    fenetre=2 => moyenne sur 5 points.
-    Ignore les valeurs nulles.
-    """
     n = len(tab)
     tab_filtre = [0] * n
 
@@ -25,21 +18,12 @@ def filtre_moyenneur(tab, fenetre=2):
                 somme += val
                 count += 1
 
-        if count > 0:
-            tab_filtre[i] = somme / count
-        else:
-            tab_filtre[i] = 0
+        tab_filtre[i] = somme / count if count > 0 else 0
 
     return tab_filtre
 
-def lire_point_lidar(tab, angle_deg, valeur_defaut=3000.0, fenetre_deg=4, min_points=1):
-    """
-    Lit un point lidar pour un angle donné.
-    Si le point exact est invalide, cherche dans une petite fenetre angulaire
-    et renvoie la mediane des valeurs valides.
 
-    Les indices sont accessibles dans [-180, 179].
-    """
+def lire_point_lidar(tab, angle_deg, valeur_defaut=3000.0, fenetre_deg=10, min_points=2):
     idx = int(angle_deg)
 
     if idx < -180:
@@ -58,32 +42,7 @@ def lire_point_lidar(tab, angle_deg, valeur_defaut=3000.0, fenetre_deg=4, min_po
         return valeur_defaut
 
     return float(np.median(valeurs))
-def lire_point_lidar_front(tab, angle_deg, valeur_defaut=3000.0, fenetre_deg=4, min_points=1):
-    """
-    Lit un point lidar pour un angle donné.
-    Si le point exact est invalide, cherche dans une petite fenetre angulaire
-    et renvoie la mediane des valeurs valides.
 
-    Les indices sont accessibles dans [-180, 179].
-    """
-    idx = int(angle_deg)
-
-    if idx < -180:
-        idx += 360
-    elif idx > 179:
-        idx -= 360
-
-    valeurs = []
-    for delta in range(-fenetre_deg, fenetre_deg + 1):
-        k = (idx + delta) % 360
-        valeur = tab[k]
-        if 0 < valeur <= valeur_defaut:
-            valeurs.append(valeur)
-
-    if len(valeurs) < int(min_points):
-        return valeur_defaut
-
-    return float(np.median(valeurs))
 
 def normaliser_distance(d, dmax):
     d = max(0.0, min(d, dmax))
@@ -92,19 +51,15 @@ def normaliser_distance(d, dmax):
 
 def distance_secteur_lidar(tab_mm, centre_deg, demi_fenetre_deg=15,
                            dmax=3000.0, min_points=5, quantile=20):
-    """
-    Estime une distance robuste dans un secteur angulaire du LiDAR.
-
-    Exemple: centre_deg=0 pour le front, centre_deg=180 pour l'arriere.
-    Retourne None si trop peu de points valides.
-    """
     centre = int(centre_deg) % 360
     fen = int(max(0, demi_fenetre_deg))
 
     valeurs = []
+
     for delta in range(-fen, fen + 1):
         idx = (centre + delta) % 360
         d = float(tab_mm[idx])
+
         if 0.0 < d <= float(dmax):
             valeurs.append(d)
 
@@ -115,14 +70,7 @@ def distance_secteur_lidar(tab_mm, centre_deg, demi_fenetre_deg=15,
     return float(np.percentile(valeurs, q))
 
 
-def detect_color_hsv(roi_bgr,
-                     min_ratio=0.03,
-                     dominance=1.15,
-                     unknown_value=-1):
-    """
-    Detecte la couleur dominante dans une ROI.
-    Retourne: (nom_couleur, valeur_bit, ratio_rouge, ratio_vert)
-    """
+def detect_color_hsv(roi_bgr, min_ratio=0.03, dominance=1.15, unknown_value=-1):
     hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
 
     lower_red1 = np.array([0, 90, 60], dtype=np.uint8)
@@ -138,7 +86,6 @@ def detect_color_hsv(roi_bgr,
     mask_red = cv2.bitwise_or(mask_red1, mask_red2)
     mask_green = cv2.inRange(hsv, lower_green, upper_green)
 
-    # Petit nettoyage du bruit sur chaque masque binaire.
     kernel = np.ones((3, 3), np.uint8)
     mask_red = cv2.morphologyEx(mask_red, cv2.MORPH_OPEN, kernel)
     mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_OPEN, kernel)
@@ -158,10 +105,6 @@ def detect_color_hsv(roi_bgr,
 
 def analyze_walls(image_bgr, band_ratio=0.30, min_ratio=0.03,
                   dominance=1.15, unknown_value=-1):
-    """
-    Analyse une bande horizontale centrale et decoupe en 3 zones.
-    Retourne un dictionnaire avec les couleurs et bits [gauche, centre, droite].
-    """
     if image_bgr is None or image_bgr.size == 0:
         return None
 
@@ -174,6 +117,7 @@ def analyze_walls(image_bgr, band_ratio=0.30, min_ratio=0.03,
     band = image_bgr[y1:y2, :].copy()
 
     third = max(1, w // 3)
+
     rois = [
         band[:, 0:third],
         band[:, third:2 * third],
@@ -191,26 +135,50 @@ def analyze_walls(image_bgr, band_ratio=0.30, min_ratio=0.03,
             dominance=dominance,
             unknown_value=unknown_value,
         )
+
         colors.append(color_name)
         values.append(bit_value)
         stats.append((red_ratio, green_ratio))
 
-    # Annotation visuelle utile pour debug local.
     cv2.rectangle(out, (0, y1), (w - 1, y2 - 1), (255, 255, 255), 2)
     cv2.line(out, (third, y1), (third, y2), (255, 255, 255), 2)
     cv2.line(out, (2 * third, y1), (2 * third, y2), (255, 255, 255), 2)
 
     labels = ["G", "C", "D"]
+
     for i, name in enumerate(colors):
         x_text = 10 + i * third
         r_ratio, g_ratio = stats[i]
-        cv2.putText(out, f"{labels[i]}: {name} -> {values[i]}", (x_text, max(25, y1 - 30)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(out, f"R={r_ratio:.2f} V={g_ratio:.2f}", (x_text, max(50, y1 - 5)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-    cv2.putText(out, f"bits={values}", (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX,
-                0.7, (0, 255, 255), 2)
+        cv2.putText(
+            out,
+            f"{labels[i]}: {name} -> {values[i]}",
+            (x_text, max(25, y1 - 30)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
+        )
+
+        cv2.putText(
+            out,
+            f"R={r_ratio:.2f} V={g_ratio:.2f}",
+            (x_text, max(50, y1 - 5)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 255),
+            1,
+        )
+
+    cv2.putText(
+        out,
+        f"bits={values}",
+        (10, h - 20),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 255),
+        2,
+    )
 
     return {
         "annotated": out,
@@ -219,224 +187,97 @@ def analyze_walls(image_bgr, band_ratio=0.30, min_ratio=0.03,
     }
 
 
-def check_camera_direction(values, direction=0, unknown_value=-1):
-    """
-    Verifie le sens de circulation via les couleurs mur gauche/droite.
-
-    Convention:
-    - rouge -> 0
-    - vert -> 1
-    - inconnu -> unknown_value
-
-    direction=0  => gauche rouge, droite verte
-    direction=1  => gauche verte, droite rouge
-    """
-    if values is None or len(values) < 3:
-        return False
-
-    left = values[0]
-    right = values[2]
-
-    if left == unknown_value or right == unknown_value:
-        return False
-
-    expected_left = int(direction)
-    expected_right = 1 - expected_left
-    return left == expected_left and right == expected_right
-
-# =========================
-# Conversion différentiel → Ackermann
-# =========================
 def differentiel_vers_ackermann(u_g, u_d, L, W, v_min, v_max, angle_max_deg):
-    """
-    Convertit les sorties du réseau neuronal différentiel (u_g, u_d)
-    en angle de braquage Ackermann (angle moyen de la roue intérieure).
+    u_g = float(np.clip(u_g, -1.0, 1.0))
+    u_d = float(np.clip(u_d, -1.0, 1.0))
 
-    Étape 1 : v et ω depuis le modèle différentiel
-        v = (u_g + u_d) / 2
-        ω = (u_d - u_g) / L
+    v_norm = 0.5 * (u_g + u_d)
+    turn_norm = 0.5 * (u_d - u_g)
 
-    Étape 2 : rayon de courbure
-        R = v / ω   (géré si ω ≈ 0)
+    v_cmd = float(v_max) * max(0.0, v_norm)
 
-    Étape 3 : angle Ackermann (roue idéale de référence au centre essieu avant)
-        δ = arctan(W / R)
+    if abs(turn_norm) < 1e-4:
+        return v_cmd, 0.0
 
-    Paramètres
-    ----------
-    u_g, u_d    : sorties tanh réseau [-1, 1]
-    L           : entraxe (voie) en m
-    W           : empattement en m
-    v_min/max   : plage de vitesse linéaire en m/s
-    angle_max_deg : saturation angle en degrés
+    L_eff = max(float(L), 1e-6)
+    omega = (u_d - u_g) / L_eff
+    v_for_angle = max(abs(v_norm), 0.15)
 
-    Retourne
-    --------
-    v_cmd       : vitesse linéaire en m/s
-    angle_deg   : angle de braquage en degrés (+ = gauche, - = droite)
-    """
-    
-    v_norm = (u_g + u_d) / 2.0
-    omega = (u_d - u_g) / L
-
-    v_cmd = v_min + (v_max - v_min) * max(0.0, v_norm)
-
-    omega_seuil = 1e-4
-    if abs(omega) < omega_seuil:
-        angle_deg = 0.0
-    else:
-        R = v_norm / omega if abs(v_norm) > 1e-4 else 1e6
-        angle_rad = np.arctan(W / R)
-        angle_deg = np.degrees(angle_rad)
-
+    angle_rad = np.arctan((float(W) * omega) / v_for_angle)
+    angle_deg = float(np.degrees(angle_rad))
     angle_deg = float(np.clip(angle_deg, -angle_max_deg, angle_max_deg))
-    print(f"DEBUG: u_g={u_g:.3f} u_d={u_d:.3f} -> v_cmd={v_cmd:.3f} m/s, angle={angle_deg:.1f} deg")
+
     return v_cmd, angle_deg
 
+
 def calculer_commande_auto(tableau_lidar_filtre, L_entraxe, W_empattement, maxangle_degre,
-                           dmax=3000.0, v_min=0.4, v_max=1.2, debug=False):
-    """
-    Calcule la commande autonome a partir du lidar filtre.
+                           dmax=3000.0, v_min=0.0, v_max=0.6, debug=False):
+    angle_l1 = 60
+    angle_l2 = 70
+    angle_front = 0
+    angle_r1 = -60
+    angle_r2 = -70
 
-    Retourne
-    --------
-    v_cmd, angle_cmd
-    """
-    p_fL_brut_memo = 0.0
-    p_fR_brut_memo = 0.0
-    diff_lr_memo   = 0.0
-    alpha          = 0.95
-    # Angles des points pertinents
-    angle_l1    =  60
-    angle_l2    =  70
-    angle_front =   0
-    angle_r1    = -60
-    angle_r2    = -70
-    angle_fL =  6
-    angle_fR = -6
+    d_l1 = lire_point_lidar(tableau_lidar_filtre, angle_l1, fenetre_deg=4, min_points=2)
+    d_l2 = lire_point_lidar(tableau_lidar_filtre, angle_l2, fenetre_deg=4, min_points=2)
+    d_front = lire_point_lidar(tableau_lidar_filtre, angle_front, fenetre_deg=4, min_points=2)
+    d_r1 = lire_point_lidar(tableau_lidar_filtre, angle_r1, fenetre_deg=4, min_points=2)
+    d_r2 = lire_point_lidar(tableau_lidar_filtre, angle_r2, fenetre_deg=4, min_points=2)
 
-    # =========================
-    # Angles LiDAR — obstacle proche
-    # =========================
+    l1 = normaliser_distance(d_l1, dmax)
+    l2 = normaliser_distance(d_l2, dmax)
+    f = normaliser_distance(d_front, dmax)
+    r1 = normaliser_distance(d_r1, dmax)
+    r2 = normaliser_distance(d_r2, dmax)
 
-
-    # 1) Lecture des 5 points exacts
-    d_l1 = lire_point_lidar(tableau_lidar_filtre, angle_l1, fenetre_deg=7, min_points=2)
-    d_l2 = lire_point_lidar(tableau_lidar_filtre, angle_l2, fenetre_deg=7, min_points=2)
-    # Le front est tres sensible aux retours parasites :
-    # fenetre plus large et seuil de validation plus strict pour eviter les bascules 3000 <-> 330 mm.
-    d_front = lire_point_lidar_front(tableau_lidar_filtre, angle_front, fenetre_deg=7, min_points=2)
-    d_r1 = lire_point_lidar(tableau_lidar_filtre, angle_r1, fenetre_deg=7, min_points=2)
-    d_r2 = lire_point_lidar(tableau_lidar_filtre, angle_r2, fenetre_deg=7, min_points=2)
-    d_fl = lire_point_lidar(tableau_lidar_filtre, angle_fL, fenetre_deg=7, min_points=2)
-    d_fr = lire_point_lidar(tableau_lidar_filtre, angle_fR, fenetre_deg=7, min_points=2)
-
-    
-
-
-    # 2) Normalisation
-    l1 = normaliser_distance(d_l1,    dmax)
-    l2 = normaliser_distance(d_l2,    dmax)
-    f  = normaliser_distance(d_front, dmax)
-    r1 = normaliser_distance(d_r1,    dmax)
-    r2 = normaliser_distance(d_r2,    dmax)
-    fl = normaliser_distance(d_fl,    1000)
-    fr = normaliser_distance(d_fr,    1000)
-
-
-    # 3) Conversion en proximite
     p_l1 = 1.0 - l1
     p_l2 = 1.0 - l2
-    p_f  = 1.0 - f
+    p_f = 1.0 - f
     p_r1 = 1.0 - r1
     p_r2 = 1.0 - r2
-   
 
-    p_f0_obs  = 1.0 - normaliser_distance(d_front, 1000)
-    p_fL_brut = 1.0 - normaliser_distance(d_fl, 1000)
-    p_fR_brut = 1.0 - normaliser_distance(d_fr, 1000)
- 
-    p_fL_brut_memo = max(p_fL_brut, alpha * p_fL_brut_memo)
-    p_fR_brut_memo = max(p_fR_brut, alpha * p_fR_brut_memo)
- 
-    declencheur = max(p_f0_obs, p_fL_brut_memo, p_fR_brut_memo)
- 
-    diff_lr_brut = (d_fl - d_fr) / 1000.0
-    diff_lr_brut = float(np.clip(diff_lr_brut, -1.0, 1.0))
-    diff_lr_memo = alpha * diff_lr_memo + (1.0 - alpha) * diff_lr_brut
-    diff_lr      = diff_lr_memo
- 
-    espace_gauche = normaliser_distance(d_l1, dmax)
-    espace_droite = normaliser_distance(d_r1, dmax)
- 
-    biais_gauche = max(0.0,  diff_lr) + 0.3 * espace_droite
-    biais_droite = max(0.0, -diff_lr) + 0.3 * espace_gauche
- 
-    p_fL_combine = declencheur * biais_gauche
-    p_fR_combine = declencheur * biais_droite
-
-    
-
-    # 4) Vecteur d'entree du reseau  [biais, p_l1, p_l2, p_f, p_r1, p_r2]
     x = np.array([
         1.0,
         p_l1,
         p_l2,
         p_f,
-        p_fL_combine,
-        p_fR_combine,
         p_r1,
         p_r2,
     ])
 
-    # =========================
-    # Réseau virtuel différentiel
-    # =========================
-    w_g = np.array([ 1.2,  1.00,  0.70, -1.8, -1.20,  1.20, -0.65, -0.90])
-    w_d = np.array([ 1.2, -0.90, -0.65, -1.8,  1.20, -1.20,  0.70,  1.00])
+    w_g = np.array([1.2, 0.85, 0.85, -1.9, -0.65, -0.65])
+    w_d = np.array([1.2, -0.65, -0.65, -1.9, 0.85, 0.85])
+
     u_g = np.tanh(np.dot(x, w_g))
     u_d = np.tanh(np.dot(x, w_d))
 
-    # 6) Conversion differentiel -> Ackermann
     v_cmd, angle_cmd = differentiel_vers_ackermann(
-        u_g, u_d,
+        u_g,
+        u_d,
         L=L_entraxe,
         W=W_empattement,
         v_min=v_min,
         v_max=v_max,
-        angle_max_deg=maxangle_degre
+        angle_max_deg=maxangle_degre,
     )
 
-    # 6bis) Vitesse continue (sans if):
-    # - avance issue du reseau
-    # - reduction si desequilibre lateral important
-    # - reduction si front proche
-
-   
     if debug:
-        # =========================
-        # Debug
-        # =========================
         print("--------------------------------------------------")
-        print(f"d_l1     = {d_l1:.1f} mm  |  d_l2    = {d_l2:.1f} mm")
-        print(f"d_front  = {d_front:.1f} mm")
-        print(f"d_r1     = {d_r1:.1f} mm  |  d_r2    = {d_r2:.1f} mm")
-        print(f"p_l1={p_l1:.3f}  p_l2={p_l2:.3f}  p_f={p_f:.3f}  p_r1={p_r1:.3f}  p_r2={p_r2:.3f}")
-        print(f"u_g      = {u_g:.3f}  |  u_d     = {u_d:.3f}")
-        print(f"v_cmd    = {v_cmd:.3f} m/s")
-        print(f"angle    = {angle_cmd:.3f} deg")
+        print(f"d_l1={d_l1:.1f} mm | d_l2={d_l2:.1f} mm")
+        print(f"d_front={d_front:.1f} mm")
+        print(f"d_r1={d_r1:.1f} mm | d_r2={d_r2:.1f} mm")
+        print(f"p_l1={p_l1:.3f} p_l2={p_l2:.3f} p_f={p_f:.3f} p_r1={p_r1:.3f} p_r2={p_r2:.3f}")
+        print(f"u_g={u_g:.3f} | u_d={u_d:.3f}")
+        print(f"v_cmd={v_cmd:.3f} m/s")
+        print(f"angle={angle_cmd:.3f} deg")
 
     return v_cmd, angle_cmd
 
 
-# =========================
-# Automate navigation/blocage (etat interne)
-# =========================
 _NAVIGATION = 0
 _BLOCAGE = 1
 
 _BACKWARD = 0
-_CAMERA_CHECKING = 1
 _TURN_LEFT = 2
 _TURN_RIGHT = 3
 
@@ -444,37 +285,241 @@ _fsm = {
     "etat": _NAVIGATION,
     "sous_etat": _BACKWARD,
     "action_counter": 0,
-    "counter_camera_confirm": 0,
     "counter_etat_backward": 0,
     "flag_turn_right": False,
     "last_front_mm": None,
-    "last_rear_mm": None,
     "front_missing_steps": 0,
-    "last_obj_dist_mm": None,
-    "last_obj_speed_m_s": 0.0,
-    "last_obj_kind": "unknown",
-    "last_obj_side": 0,
-    "score_left": 0.0,
-    "score_right": 0.0,
 }
 
 
 def reset_automate():
-    """Reinitialise l'automate (utiliser lors du passage en mode manuel)."""
     _fsm["etat"] = _NAVIGATION
     _fsm["sous_etat"] = _BACKWARD
     _fsm["action_counter"] = 0
-    _fsm["counter_camera_confirm"] = 0
     _fsm["counter_etat_backward"] = 0
     _fsm["flag_turn_right"] = False
     _fsm["last_front_mm"] = None
-    _fsm["last_rear_mm"] = None
     _fsm["front_missing_steps"] = 0
-    _fsm["last_obj_dist_mm"] = None
-    _fsm["last_obj_speed_m_s"] = 0.0
-    _fsm["last_obj_kind"] = "unknown"
-    _fsm["last_obj_side"] = 0
-    _fsm["score_left"] = 0.0
-    _fsm["score_right"] = 0.0
 
 
+def get_automate_state():
+    return dict(_fsm)
+
+
+def _distance_front_robuste(tab, centre_deg, demi_fenetre_deg, dmax, min_points):
+    d = distance_secteur_lidar(
+        tab,
+        centre_deg=centre_deg,
+        demi_fenetre_deg=int(demi_fenetre_deg),
+        dmax=float(dmax),
+        min_points=int(min_points),
+        quantile=20,
+    )
+
+    if d is not None:
+        return float(d)
+
+    d = distance_secteur_lidar(
+        tab,
+        centre_deg=centre_deg,
+        demi_fenetre_deg=max(3, int(demi_fenetre_deg) // 2),
+        dmax=float(dmax),
+        min_points=max(1, int(min_points) // 3),
+        quantile=35,
+    )
+
+    if d is not None:
+        return float(d)
+
+    d_point = lire_point_lidar(
+        tab,
+        centre_deg,
+        valeur_defaut=-1.0,
+        fenetre_deg=max(2, int(demi_fenetre_deg) // 2),
+        min_points=1,
+    )
+
+    return float(d_point) if d_point > 0 else None
+
+
+def _choisir_rotation_camera(wall_values, default_turn_right=False):
+    if not isinstance(wall_values, (list, tuple)) or len(wall_values) < 3:
+        return bool(default_turn_right)
+
+    red_count = sum(1 for v in wall_values if v == 0)
+    green_count = sum(1 for v in wall_values if v == 1)
+
+    if red_count > green_count:
+        return True
+
+    if green_count > red_count:
+        return False
+
+    return bool(default_turn_right)
+
+
+def calculer_commande_automate(
+    tableau_lidar_filtre,
+    L_entraxe,
+    W_empattement,
+    maxangle_degre,
+    dmax=3000.0,
+    v_min=0.0,
+    v_max=0.6,
+    seuil_v_blocage=0.02,
+    wall_values=None,
+    sec_front_fenetre_deg=4,
+    sec_front_min_points=5,
+    seuil_front_degagement_mm=600.0,
+    blocage_action_duration_s=0.04,
+    boucle_periode_s=0.01,
+    vitesse_blocage_m_s=0.6,
+    vitesse_turn_blocage_m_s=0.5,
+    angle_recul_fixe_deg=18.0,
+    debug=False,
+):
+    v_base, angle_base = calculer_commande_auto(
+        tableau_lidar_filtre,
+        L_entraxe=L_entraxe,
+        W_empattement=W_empattement,
+        maxangle_degre=maxangle_degre,
+        dmax=dmax,
+        v_min=v_min,
+        v_max=v_max,
+        debug=debug,
+    )
+
+    d_front = _distance_front_robuste(
+        tableau_lidar_filtre,
+        centre_deg=0,
+        demi_fenetre_deg=sec_front_fenetre_deg,
+        dmax=dmax,
+        min_points=sec_front_min_points,
+    )
+
+    if d_front is None:
+        _fsm["front_missing_steps"] += 1
+        hold_steps = max(1, int(0.30 / max(1e-4, float(boucle_periode_s))))
+
+        if _fsm["front_missing_steps"] <= hold_steps and _fsm["last_front_mm"] is not None:
+            d_front = float(_fsm["last_front_mm"])
+    else:
+        _fsm["front_missing_steps"] = 0
+
+    _fsm["last_front_mm"] = d_front
+
+    blocked_by_stop = float(v_base) <= float(seuil_v_blocage)
+
+    can_exit_blockage = (
+        d_front is not None
+        and d_front > float(seuil_front_degagement_mm)
+    )
+
+    if wall_values is not None:
+        _fsm["flag_turn_right"] = _choisir_rotation_camera(
+            wall_values,
+            default_turn_right=_fsm["flag_turn_right"],
+        )
+
+    action_steps = max(
+        1,
+        int(float(blocage_action_duration_s) / max(1e-4, float(boucle_periode_s))),
+    )
+
+    v_backward = abs(float(vitesse_blocage_m_s))
+    v_turn = abs(float(vitesse_turn_blocage_m_s))
+
+    v_out = 0.0
+    angle_out = 0.0
+
+    match _fsm["etat"]:
+        case 0:
+            if blocked_by_stop:
+                _fsm["etat"] = _BLOCAGE
+                _fsm["sous_etat"] = _BACKWARD
+                _fsm["action_counter"] = 0
+                v_out = 0.0
+                angle_out = 0.0
+            else:
+                v_out = float(v_base)
+                angle_out = float(angle_base)
+
+        case 1:
+            match _fsm["sous_etat"]:
+                case 0:
+                    if _fsm["action_counter"] >= action_steps:
+                        _fsm["action_counter"] = 0
+
+                        if _fsm["flag_turn_right"]:
+                            _fsm["sous_etat"] = _TURN_RIGHT
+                            angle_out = -float(angle_recul_fixe_deg)
+                        else:
+                            _fsm["sous_etat"] = _TURN_LEFT
+                            angle_out = float(angle_recul_fixe_deg)
+
+                        v_out = -v_turn
+                    else:
+                        _fsm["action_counter"] += 1
+                        v_out = -v_backward
+
+                        if _fsm["flag_turn_right"]:
+                            angle_out = float(angle_recul_fixe_deg)
+                        else:
+                            angle_out = -float(angle_recul_fixe_deg)
+
+                case 2:
+                    if _fsm["action_counter"] >= action_steps:
+                        _fsm["action_counter"] = 0
+
+                        if can_exit_blockage:
+                            _fsm["etat"] = _NAVIGATION
+                            _fsm["sous_etat"] = _BACKWARD
+                            _fsm["counter_etat_backward"] = 0
+                            v_out = float(v_base)
+                            angle_out = float(angle_base)
+                        else:
+                            _fsm["sous_etat"] = _BACKWARD
+                            _fsm["counter_etat_backward"] += 1
+                            _fsm["flag_turn_right"] = True
+                            v_out = -v_backward
+                            angle_out = -float(angle_recul_fixe_deg)
+
+                    else:
+                        _fsm["action_counter"] += 1
+                        v_out = -v_turn
+                        angle_out = float(angle_recul_fixe_deg)
+
+                case 3:
+                    if _fsm["action_counter"] >= action_steps:
+                        _fsm["action_counter"] = 0
+
+                        if can_exit_blockage:
+                            _fsm["etat"] = _NAVIGATION
+                            _fsm["sous_etat"] = _BACKWARD
+                            _fsm["counter_etat_backward"] = 0
+                            v_out = float(v_base)
+                            angle_out = float(angle_base)
+                        else:
+                            _fsm["sous_etat"] = _BACKWARD
+                            _fsm["counter_etat_backward"] += 1
+                            _fsm["flag_turn_right"] = False
+                            v_out = -v_backward
+                            angle_out = float(angle_recul_fixe_deg)
+
+                    else:
+                        _fsm["action_counter"] += 1
+                        v_out = -v_turn
+                        angle_out = -float(angle_recul_fixe_deg)
+
+                case _:
+                    _fsm["sous_etat"] = _BACKWARD
+                    _fsm["action_counter"] = 0
+                    v_out = 0.0
+                    angle_out = 0.0
+
+        case _:
+            reset_automate()
+            v_out = 0.0
+            angle_out = 0.0
+
+    return float(v_out), float(angle_out)

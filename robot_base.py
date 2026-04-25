@@ -67,17 +67,10 @@ class Actionneurs:
         logger.info("Actionneurs arrêtés")
         self._print_debug(force=True)
 
-    # ----------------------------------------------------------
     # Commandes de base
-    # ----------------------------------------------------------
 
-    def set_vitesse_m_s(self, vitesse_m_s: float):
-        """Commande la vitesse en m/s. Positif = avant, négatif = arrière."""
-        # Saturation logicielle
-        vitesse_m_s = max(-config.VITESSE_MAX_M_S_HARD,
-                          min(config.VITESSE_MAX_M_S_SOFT, vitesse_m_s))
-        self._last_v_cmd = vitesse_m_s
-
+    def _appliquer_vitesse_pwm(self, vitesse_m_s: float):
+        """Applique directement la consigne vitesse -> PWM propulsion."""
         if vitesse_m_s == 0:
             pwm_prop = config.PWM_STOP_PROP
         elif vitesse_m_s > 0:
@@ -89,8 +82,30 @@ class Actionneurs:
             v = vitesse_m_s * config.DELTA_PWM_MAX_PROP / config.VITESSE_MAX_M_S_HARD
             pwm_prop = config.PWM_STOP_PROP - config.DIRECTION_PROP * (config.POINT_MORT_PROP - v)
 
+        self._last_v_cmd = float(vitesse_m_s)
         self._last_pwm_prop = float(pwm_prop)
         self._pwm_prop.change_duty_cycle(self._last_pwm_prop)
+
+    def _engager_marche_arriere(self):
+        """Séquence d'armement ESC pour autoriser la marche arrière."""
+        self._appliquer_vitesse_pwm(0.0)
+        self._appliquer_vitesse_pwm(-float(config.VITESSE_MAX_M_S_HARD))
+        time.sleep(0.2)
+        self._appliquer_vitesse_pwm(0.0)
+        time.sleep(0.1)
+
+    def set_vitesse_m_s(self, vitesse_m_s: float):
+        """Commande la vitesse en m/s. Positif = avant, négatif = arrière."""
+        prev_v_cmd = float(self._last_v_cmd)
+        # Saturation logicielle
+        vitesse_m_s = max(-config.VITESSE_MAX_M_S_HARD,
+                          min(config.VITESSE_MAX_M_S_SOFT, vitesse_m_s))
+
+        # Passage vers une consigne negative: armer d'abord le recul du variateur.
+        if vitesse_m_s < 0 and prev_v_cmd >= 0:
+            self._engager_marche_arriere()
+
+        self._appliquer_vitesse_pwm(vitesse_m_s)
         self._print_debug()
 
     def set_direction_degre(self, angle_degre: float):
@@ -116,30 +131,14 @@ class Actionneurs:
     def recule(self):
         """Séquence de recul : impulsion courte arrière, pause, puis recul lent."""
         logger.info("Séquence de recul déclenchée")
-        # Impulsion courte pour débloquer le variateur
-        self.set_vitesse_m_s(-config.VITESSE_MAX_M_S_HARD)
-        time.sleep(0.2)
-        self.set_vitesse_m_s(0)
-        time.sleep(0.2)
-        # Recul lent
-        self.set_vitesse_m_s(config.VITESSE_RECUL_M_S)
+        v_recul = -abs(float(getattr(config, "VITESSE_RECUL_M_S", -4.0)))
+        self.set_vitesse_m_s(v_recul)
         time.sleep(config.DUREE_RECUL_S)
         self.set_vitesse_m_s(0)
 
 
 class CapteurLidar:
-    """Acquisition lidar dans un thread dédié.
-
-    Usage :
-        lidar = CapteurLidar()
-        lidar.connecter()
-        lidar.demarrer()
-        ...
-        if lidar.lire():          # retourne True si nouveau scan disponible
-            tab = lidar.tableau_mm  # liste de 360 distances en mm
-        ...
-        lidar.arreter()
-    """
+   
 
     def __init__(self):
         self.tableau_mm: list = [0] * 360   # tableau public lu par la logique de conduite
@@ -152,11 +151,7 @@ class CapteurLidar:
         self._last_debug_print = 0.0
 
     def connecter(self):
-        """Ouvre la connexion série et démarre le moteur du lidar.
-
-        Séquence identique à test_lidar.py qui fonctionne :
-        connect() → get_info() → start_motor()
-        """
+      
         self._lidar = RPLidar(config.LIDAR_PORT, baudrate=config.LIDAR_BAUDRATE)
         self._lidar.connect()
         logger.info("Lidar connecté : %s", self._lidar.get_info())
@@ -164,14 +159,12 @@ class CapteurLidar:
         time.sleep(1)
 
     def demarrer(self):
-        """Lance le thread d'acquisition."""
         self._run    = True
         self._thread = threading.Thread(target=self._scan_loop, daemon=True, name="lidar_scan")
         self._thread.start()
         logger.info("Thread lidar démarré")
 
     def arreter(self):
-        """Stoppe l'acquisition et déconnecte proprement le lidar."""
         self._run = False
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=3)
@@ -186,11 +179,7 @@ class CapteurLidar:
         logger.info("Lidar arrêté")
 
     def lire(self) -> bool:
-        """Copie le tampon d'acquisition dans tableau_mm si un nouveau scan est prêt.
-
-        Retourne True si un nouveau scan a été consommé, False sinon.
-        Thread-safe.
-        """
+      
         with self._lock:
             if self._nouveau_scan:
                 self.tableau_mm = self._acqui_mm.copy()
@@ -199,7 +188,6 @@ class CapteurLidar:
         return False
 
     def _scan_loop(self):
-        """Boucle interne du thread d'acquisition (exécutée dans le thread lidar)."""
         while self._run:
             try:
                 ignore_sector = bool(getattr(config, "LIDAR_IGNORE_INTERIOR_SECTOR", False))
@@ -256,9 +244,7 @@ class CapteurLidar:
                 time.sleep(0.1)
 
 
-# ============================================================
-# Test standalone
-# ============================================================
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
