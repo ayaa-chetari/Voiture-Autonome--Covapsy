@@ -188,27 +188,23 @@ def analyze_walls(image_bgr, band_ratio=0.30, min_ratio=0.03,
 
 
 def differentiel_vers_ackermann(u_g, u_d, L, W, v_min, v_max, angle_max_deg):
-    u_g = float(np.clip(u_g, -1.0, 1.0))
-    u_d = float(np.clip(u_d, -1.0, 1.0))
+    v_norm = (u_g + u_d) / 2.0
+    omega  = (u_d - u_g) / L
 
-    v_norm = 0.5 * (u_g + u_d)
-    turn_norm = 0.5 * (u_d - u_g)
 
-    v_cmd = float(v_max) * max(0.0, v_norm)
+    omega_seuil = 1e-4
+    if abs(omega) < omega_seuil:
+        angle_deg = 0.0
+    else:
+        R = v_norm / omega if abs(v_norm) > 1e-4 else 1e6
+        angle_rad = np.arctan(W / R)
+        angle_deg = np.degrees(angle_rad)
 
-    if abs(turn_norm) < 1e-4:
-        return v_cmd, 0.0
-
-    L_eff = max(float(L), 1e-6)
-    omega = (u_d - u_g) / L_eff
-    v_for_angle = max(abs(v_norm), 0.15)
-
-    angle_rad = np.arctan((float(W) * omega) / v_for_angle)
-    angle_deg = float(np.degrees(angle_rad))
     angle_deg = float(np.clip(angle_deg, -angle_max_deg, angle_max_deg))
+    ratio = abs(angle_deg) / angle_max_deg
+    v_cmd = v_max - (v_max - v_min) * ratio
 
     return v_cmd, angle_deg
-
 
 def calculer_commande_auto(tableau_lidar_filtre, L_entraxe, W_empattement, maxangle_degre,
                            dmax=3000.0, v_min=0.0, v_max=0.6, debug=False):
