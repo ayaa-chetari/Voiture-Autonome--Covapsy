@@ -48,14 +48,25 @@ Dans ce cas :
 
 ---
 
-## Rôle de la caméra
 
-La caméra Raspberry Pi (module 2) permet de :
+## Traitement d'image
 
-- détecter la couleur des murs (rouge / vert)
-- déterminer le sens de rotation en cas de blocage
+La caméra Raspberry Pi (module 2) est utilisée avec OpenCV pour analyser la couleur des murs.
 
-Cette information permet d’orienter la décision lorsque le LiDAR seul n’est pas suffisant.
+Le traitement suit les étapes suivantes :
+
+1. Conversion de l’image de l’espace RGB vers l’espace HSV  
+   → permet de réduire l’impact des variations de luminosité et d’ombres
+
+2. Sélection d’une zone d’intérêt au centre de l’image  
+
+3. Découpage de cette zone en plusieurs parties (gauche, centre, droite)
+
+4. Détection des couleurs rouge et vert à l’aide de seuils HSV
+
+5. Calcul du ratio de pixels de chaque couleur  
+
+Le résultat permet de savoir si les murs sont rouges ou verts et d’utiliser cette information pour choisir le sens de rotation en cas de blocage.
 
 ---
 
