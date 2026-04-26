@@ -1,4 +1,4 @@
-# CoVAPSy — Voiture autonome (Raspberry Pi + LiDAR + Caméra)
+# CoVAPSy — Voiture autonome
 
 ## Description
 
@@ -17,17 +17,12 @@ Le système repose sur :
 L’algorithme principal repose sur un réseau de neurones artificiel :
 
 - 9 entrées issues des mesures du LiDAR
-- 2 neurones de sortie :
-  - vitesse gauche (v_g)
-  - vitesse droite (v_d)
+- 2 neurones de sortie :  vitesse droite (v_d) + vitesse gauche (v_g)
+
+
 
 Ce réseau est basé sur un modèle de robot différentiel.  
 Il produit directement deux vitesses indépendantes (gauche et droite) en fonction de l’environnement.
-
-Le principe est le suivant :
-- les distances mesurées influencent les neurones
-- les obstacles ralentissent un côté du véhicule
-- les zones libres favorisent le mouvement
 
 ---
 
@@ -38,11 +33,9 @@ La voiture étant de type Ackermann (direction par les roues avant), les vitesse
 - une vitesse linéaire
 - un angle de braquage
 
-Ainsi :
 - si v_g ≈ v_d → la voiture avance tout droit
 - si v_g ≠ v_d → un angle de braquage est généré
 
-Cette conversion permet d’adapter le modèle différentiel à un véhicule réel.
 
 ---
 
@@ -52,7 +45,6 @@ Une machine à états est utilisée lorsque la voiture est bloquée (face à un 
 
 Dans ce cas :
 - la voiture effectue des manœuvres de recul et de rotation
-- la stratégie est simple et réactive pour sortir rapidement de la situation
 
 ---
 
@@ -68,3 +60,27 @@ Cette information permet d’orienter la décision lorsque le LiDAR seul n’est
 ---
 
 ## Structure du projet
+
+### voiture-reelle.py
+- boucle principale
+- gestion du mode autonome
+- lecture des capteurs
+- envoi des commandes aux actionneurs
+
+### commun.py
+- traitement des données LiDAR
+- traitement d’image (détection couleur)
+- algorithme de navigation
+- gestion des situations de blocage
+
+### config.py
+- paramètres du système 
+
+### robot_base.py
+- interface avec le matériel :
+  - moteurs (PWM)
+  - direction
+  - LiDAR
+
+
+
