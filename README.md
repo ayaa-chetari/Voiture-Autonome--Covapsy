@@ -16,7 +16,7 @@ Le système repose sur :
 
 L’algorithme principal repose sur un réseau de neurones artificiel :
 
-- 9 entrées issues des mesures du LiDAR
+- 5 entrées issues des mesures du LiDAR
 - 2 neurones de sortie :  vitesse droite (v_d) + vitesse gauche (v_g)
 
 
