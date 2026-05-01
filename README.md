@@ -12,19 +12,19 @@ La logique globale est similaire à celle utilisée sur la voiture réelle (déj
 
 ---
 
-## 🗂️ Structure du projet
+##  Structure du projet
 
-### 📁 worlds/
+###  worlds/
 Contient la **piste de simulation** (environnements Webots).
 
 ---
 
-### 📁 protos/
+###  protos/
 Contient le **modèle du robot (Tamiya TT02)** utilisés dans la simulation.
 
 ---
 
-### 📁 controllers/
+###  controllers/
 Contient le **code de contrôle de la voiture** :
 
 - `controller_violet.py`  
