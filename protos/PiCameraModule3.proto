@@ -1,0 +1,25 @@
+#VRML_SIM R2025a utf8
+
+PROTO PiCameraModule3 [
+  field SFVec3f    translation 0 0 0
+  field SFRotation rotation 0 1 0 0
+  field SFString   name "pi_camera"
+  field SFInt32    width 640
+  field SFInt32    height 480
+  field SFFloat    fieldOfView 1.04
+]
+{
+  Transform {
+    translation IS translation
+    rotation IS rotation
+    children [
+      Camera {
+        name IS name
+        width IS width
+        height IS height
+        fieldOfView IS fieldOfView
+        near 0.01
+      }
+    ]
+  }
+}
